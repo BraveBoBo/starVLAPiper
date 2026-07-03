@@ -8,7 +8,7 @@ is_debug: false
 framework:
   name: QwenPI_v3
   qwenvl:
-    base_vlm: ../playground/Pretrained_models/Qwen3.5-0.8B  # playground 已移到仓库根 smooth/playground; 训练 cwd=smooth/starVLA 故用 ../; 或填绝对路径
+    base_vlm: /home/oem/project/smooth/playground/Pretrained_models/Qwen3.5-0.8B  # machine-local weights (like ENV in run_fold_train.sh, edit per machine)
     attn_implementation: flash_attention_2                  # 已装 flash-attn; 不稳可改 sdpa
   action_model:
     action_dim: 14
