@@ -30,6 +30,7 @@ diffusers
 timm
 tyro
 websockets
+robotmq>=0.1.14   # piper deploy transport (RMQServer/RMQClient)
 tdigest==0.5.2.2
 
 # env for qwen3.5 tip: flash-linear-attention may break older checkpoints (performance regression on previous ckpts)

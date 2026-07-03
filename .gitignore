@@ -255,3 +255,10 @@ bar
 code
 examples/simBenchmarks/LIBERO/eval_files/auto_eval_scripts/run_all_libero_untested.sh
 starVLA/model/framework/VLM4A/QwenGR00T_v2.py
+
+# piper deploy aux: large binaries + third-party sdk (not source)
+*.deb
+*.pkl
+examples/realRobots/Piper/collect_data/docs/1.gif
+examples/realRobots/Piper/aloha-devel/openvla/multi_camera_step_20.png
+examples/realRobots/Piper/collect_data/piper_sdk_demo/

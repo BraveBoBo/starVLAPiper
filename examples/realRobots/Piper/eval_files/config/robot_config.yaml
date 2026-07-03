@@ -1,0 +1,33 @@
+# ==========================================
+# 机械臂 Ruckig 在线轨迹生成配置
+# ==========================================
+
+# [1] 模型参数
+model_dt: 0.0333           # 推理动作步长 (30Hz, 对齐 fold 数据 fps=30; 注: from_yaml 会 pop 此项, 仅作注释)
+target_update_freq: 30     # 关键: chunk 帧消费频率, 须 == 训练数据 fps(fold=30); 默认 20 会让动作慢 1.5 倍
+dof: 14                     # 自由度 (双臂共14)
+
+# [2] 执行参数
+control_freq: 100           # Servo 线程频率 (100Hz)
+
+# [3] 前瞻纯跟踪 (Lookahead Pure Pursuit)
+lookahead_time: 0.2         # 前瞻窗口 (s)，在 spline 上 t_now + lookahead 处取目标
+                            # 补偿推理延迟 (~0.14s) + 通信/处理余量
+
+# [4] Ruckig 运动约束 (单关节)
+max_velocity: 1.0           # rad/s，根据机械臂能力调整
+max_acceleration: 2.0       # rad/s²
+max_jerk: 10.0              # rad/s³
+
+# [5] Temporal Ensemble
+ensemble_history_len: 4     # 保存最近 N 个 chunk 用于加权平均
+
+# [6] 可切换平滑器(阶段② 块后处理 + 阶段③ 块边界续接; Ruckig 始终作最后 jerk 限幅)
+chunk_smoother:             # 阶段②: 整块 (T,14) -> 平滑块, 只作用关节维、夹爪旁路
+  method: none             # none | mean | gauss | bspline(需 scipy + ABPolicy)
+  window_size: 5           # mean/gauss 滑窗(奇数)
+  n_ctrl: 8                # bspline 控制点数
+target_blender:            # 阶段③: 多块 -> 当前目标点
+  method: ensemble         # ensemble(现有默认) | latest | bspline_refit(二期)
+  ensemble_exp_decay: 0.5  # ensemble 按块新旧的指数衰减
+joint_dims: [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]   # 关节维; 夹爪 [6],[13] 旁路

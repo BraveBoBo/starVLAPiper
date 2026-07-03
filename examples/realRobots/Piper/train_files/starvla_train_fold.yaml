@@ -1,0 +1,61 @@
+run_id: qwenpi_v3_fold_qwen35_0p8b
+run_root_dir: results/Checkpoints
+seed: 42
+wandb_project: starVLA_piper_fold
+wandb_entity: your_wandb_entity
+is_debug: false
+
+framework:
+  name: QwenPI_v3
+  qwenvl:
+    base_vlm: ../playground/Pretrained_models/Qwen3.5-0.8B  # playground 已移到仓库根 smooth/playground; 训练 cwd=smooth/starVLA 故用 ../; 或填绝对路径
+    attn_implementation: flash_attention_2                  # 已装 flash-attn; 不稳可改 sdpa
+  action_model:
+    action_dim: 14
+    state_dim: 14
+    action_horizon: 16          # = data_config.action_indices 长度
+    diffusion_model_cfg:
+      action_dit_hidden_dim: 512   # 给 0.8B 调小(默认 1024 是给 4B 的); 512 % attention_head_dim(64)==0
+      attention_head_dim: 64
+
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    include_state: true           # fold 训练吃 state(QwenPI_v3 离散化 state)
+    data_root_dir: /data/datasets/piper
+    data_mix: fold                # -> data_config 的 DATASET_NAMED_MIXTURES["fold"]
+    lerobot_version: "v3.0"       # 关键! fold 是 LeRobot v3.0(默认 v2.0 会读不到 file-*)
+    action_type: abs_qpos         # fold action 是绝对关节角
+    action_mode: abs
+    sequential_step_sampling: False
+    per_device_batch_size: 4      # 单卡 4080 16G + 3 相机, 保守; 显存够再加
+    load_all_data_for_training: true
+    video_backend: pyav
+    obs_image_size: [224, 224]    # 推理 predict_action(QwenPI_v3:369)据此 resize 224 方形, 对齐训练 _pack_sample(datasets.py:1384 硬编码 resize((224,224)))
+    # 注: 训练 dataloader _pack_sample 硬编码压 224 方形(不读此项), 此项只在推理路径生效; 两边都 224 方形 -> 训推一致
+
+trainer:
+  max_train_steps: 100000
+  num_warmup_steps: 2000
+  save_interval: 5000
+  eval_interval: 1000
+  learning_rate:
+    base: 1.0e-05
+    qwen_vl_interface: 1.0e-05
+    action_model: 1.0e-04
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+  freeze_modules: ''
+  loss_scale:
+    vla: 1.0
+  max_grad_norm: 1.0
+  weight_decay: 0.0
+  logging_frequency: 10
+  gradient_clipping: 1.0
+  gradient_accumulation_steps: 4   # 等效 batch 16(4×4); 配合 per_device_batch_size 调
+  optimizer:
+    name: AdamW
+    betas: [0.9, 0.95]
+    eps: 1.0e-08
+    weight_decay: 1.0e-08

@@ -1,0 +1,33 @@
+# ==========================================
+# 推理客户端(GPU/推理机)配置
+# 执行端的 Ruckig / temporal-ensemble 配置见 robot_config.yaml(机器人机)
+# ==========================================
+
+# starVLA policy server(与本 client 同机,故默认 127.0.0.1)
+starvla:
+  host: 127.0.0.1
+  port: 10093
+  unnorm_key: null          # 多 robot checkpoint 必填(如 "piper"/"robotwin");单 robot 留 null 自动选
+  send_state: true          # fold 训练 include_state=true → 传 raw state, server 端(piper_server.py)用训练 transform 归一化
+  use_ddim: true
+  num_ddim_steps: 10
+
+# 机器人执行端(robot_server.py,远端机器人机)
+robot_server:
+  ip: 192.168.189.8
+  port: 8888
+
+# 观测采集频率(Hz)
+obs_freq: 15
+
+# 任务指令:留空(null)则用 obs 自带的 language;填字符串则覆盖
+instruction: null
+
+# obs / action 适配(必须与训练时一致,否则动作错乱)
+adapter:
+  # 相机顺序须 == 训练 video_keys 顺序;cam_d455(前/global)对应训练 cam_high 位
+  cam_order: [cam_d455, cam_left_wrist, cam_right_wrist]
+  image_size: [224, 224]    # 压 224 方形 = 对齐训练 dataloader(datasets.py:1384 _pack_sample 硬编码 resize((224,224))); 注: cv2.resize 是 (W,H), 224 方形与训练一致
+  bgr_to_rgb: false         # 若 RosOperator.get_frame() 输出 BGR(训练用 RGB)设 true
+  # 动作重排:fold 训练 action 布局 [L_arm6, L_grip, R_arm6, R_grip] 已等于执行端 -> identity
+  reorder: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
