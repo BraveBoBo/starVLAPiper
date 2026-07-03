@@ -87,7 +87,7 @@ _DISCOVERED = False
 
 
 def _find_registry_dirs() -> list[Path]:
-    """Return all ``examples/*/train_files/data_registry/`` directories."""
+    """Return all ``examples/**/train_files/data_registry/`` directories."""
     # Walk up from this file to the repo root
     # registry.py is at starVLA/dataloader/gr00t_lerobot/registry.py
     #   parents: [0]=gr00t_lerobot, [1]=dataloader, [2]=starVLA(pkg), [3]=repo root
@@ -95,11 +95,12 @@ def _find_registry_dirs() -> list[Path]:
     examples_dir = repo_root / "examples"
     if not examples_dir.is_dir():
         return []
+    # Scan both the legacy flat layout (examples/<Bench>/) and the grouped layout
+    # from the simBenchmarks/modelExtensions/realRobots reorg (examples/<Group>/<Bench>/).
+    patterns = (f"*/train_files/{_REGISTRY_DIR_NAME}", f"*/*/train_files/{_REGISTRY_DIR_NAME}")
     dirs: list[Path] = []
-    for bench_dir in sorted(examples_dir.iterdir()):
-        registry_dir = bench_dir / "train_files" / _REGISTRY_DIR_NAME
-        if registry_dir.is_dir():
-            dirs.append(registry_dir)
+    for pattern in patterns:
+        dirs.extend(p for p in sorted(examples_dir.glob(pattern)) if p.is_dir())
     return dirs
 
 
