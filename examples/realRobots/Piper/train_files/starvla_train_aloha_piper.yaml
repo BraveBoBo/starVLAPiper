@@ -1,7 +1,7 @@
-run_id: qwenpi_v3_fold_qwen35_0p8b
+run_id: qwenpi_v3_aloha_piper_qwen35_0p8b
 run_root_dir: results/Checkpoints
 seed: 42
-wandb_project: starVLA_piper_fold
+wandb_project: starVLA_aloha_piper
 wandb_entity: your_wandb_entity
 is_debug: false
 
@@ -23,7 +23,7 @@ datasets:
     dataset_py: lerobot_datasets
     include_state: true           # fold 训练吃 state(QwenPI_v3 离散化 state)
     data_root_dir: /data/datasets/piper
-    data_mix: fold                # -> data_config 的 DATASET_NAMED_MIXTURES["fold"]
+    data_mix: aloha_piper_all     # -> data_config DATASET_NAMED_MIXTURES["aloha_piper_all"]
     lerobot_version: "v3.0"       # 关键! fold 是 LeRobot v3.0(默认 v2.0 会读不到 file-*)
     action_type: abs_qpos         # fold action 是绝对关节角
     action_mode: abs

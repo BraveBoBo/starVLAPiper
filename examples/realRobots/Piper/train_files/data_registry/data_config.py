@@ -1,4 +1,4 @@
-"""Piper (aloha-agilex) fold 数据集 — data config / robot_type / mixture。
+"""Piper (aloha-agilex) dual-arm dataset family (aloha_piper) — data config / robot_type / mixture.
 
 照 examples/Robotwin 的 AgilexDataConfig,但针对 fold 数据的两个差异:
 1. 布局是 [L_arm6, L_grip, R_arm6, R_grip](夹爪 interleaved, 与 info.json names 一致),
@@ -14,7 +14,7 @@ from starVLA.dataloader.gr00t_lerobot.transform.state_action import StateActionT
 from starVLA.dataloader.gr00t_lerobot.embodiment_tags import EmbodimentTag
 
 
-class PiperFoldDataConfig:
+class AlohaPiperDataConfig:
     embodiment_tag = EmbodimentTag.NEW_EMBODIMENT
     video_keys = ["video.cam_d455", "video.cam_left_wrist", "video.cam_right_wrist"]
     # fold 布局: [左臂6, 左夹爪, 右臂6, 右夹爪] —— 顺序须与 meta/modality.json 切分、部署端拼接一致
@@ -50,9 +50,9 @@ class PiperFoldDataConfig:
         ])
 
 
-ROBOT_TYPE_CONFIG_MAP = {"piper_fold": PiperFoldDataConfig()}
+ROBOT_TYPE_CONFIG_MAP = {"aloha_piper": AlohaPiperDataConfig()}
 
-# mixture: (数据集子目录, 权重, robot_type) —— data_root_dir/fold 即数据集
+# mixture: (dataset subdir, weight, robot_type); on-disk dir stays "fold" (one task of the family)
 DATASET_NAMED_MIXTURES = {
-    "fold": [("fold", 1.0, "piper_fold")],
+    "aloha_piper_all": [("fold", 1.0, "aloha_piper")],
 }

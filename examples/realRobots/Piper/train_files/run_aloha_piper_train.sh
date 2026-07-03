@@ -1,8 +1,8 @@
 #!/bin/bash
-# fold(aloha-agilex) 训练启动 — Qwen3.5-0.8B + QwenPI_v3, 16G 单卡可跑(zero2 + optimizer CPU offload)
+# aloha_piper (aloha-agilex dual-arm) 训练启动 — Qwen3.5-0.8B + QwenPI_v3, 16G 单卡可跑(zero2 + optimizer CPU offload)
 # 用法(必须在 starVLA 目录跑, 即本仓的 smooth/starVLA):
-#   bash examples/realRobots/Piper/train_files/run_fold_train.sh                       # 正式训练
-#   bash examples/realRobots/Piper/train_files/run_fold_train.sh --trainer.max_train_steps=5   # 冒烟测
+#   bash examples/realRobots/Piper/train_files/run_aloha_piper_train.sh                       # 正式训练
+#   bash examples/realRobots/Piper/train_files/run_aloha_piper_train.sh --trainer.max_train_steps=5   # 冒烟测
 # 额外的 OmegaConf 覆盖直接追加(注意: dotlist 覆盖必须带 -- 前缀, 见 normalize_dotlist_args)
 set -e
 ENV=/home/oem/miniconda3/envs/starVLA   # ← 换机器改这里
@@ -22,5 +22,5 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True        # 减显存碎片
 "$ENV/bin/accelerate" launch \
   --config_file starVLA/config/deepseeds/fold_zero2_offload.yaml \
   starVLA/training/train_starvla.py \
-  --config_yaml examples/realRobots/Piper/train_files/starvla_train_fold.yaml \
+  --config_yaml examples/realRobots/Piper/train_files/starvla_train_aloha_piper.yaml \
   "$@"
