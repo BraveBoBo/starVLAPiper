@@ -1,0 +1,74 @@
+run_id: elephant_aloha_piper_qwen35_0p8b
+run_root_dir: results/Checkpoints
+seed: 42
+wandb_project: starVLA_aloha_piper
+wandb_entity: your_wandb_entity
+is_debug: false
+
+framework:
+  name: Elephant
+  qwenvl:
+    base_vlm: /home/oem/project/smooth/playground/Pretrained_models/Qwen3.5-0.8B  # machine-local weights (like ENV in run_fold_train.sh, edit per machine)
+    attn_implementation: flash_attention_2                  # 已装 flash-attn; 不稳可改 sdpa
+  action_model:
+    action_dim: 14
+    state_dim: 14
+    action_horizon: 16          # = data_config.action_indices 长度
+    diffusion_model_cfg:
+      action_dit_hidden_dim: 512   # 给 0.8B 调小(默认 1024 是给 4B 的); 512 % attention_head_dim(64)==0
+      attention_head_dim: 64
+  moment_memory:
+    enabled: true
+    num_moment_tokens: 4        # n_q 个可学习 moment token(独立 nn.Parameter 拼 inputs_embeds 尾部, 不动 tokenizer)
+    memory_window: 1            # K; 起步 1(仅当前帧摘要条件), 跑通后升 4(需 history_images 数据契约)
+    memory_num_layers: 2        # BlockCausalMomentMemory 深度
+    num_heads: 8
+    mlp_ratio: 4.0
+    dropout: 0.0
+    history_image_key: history_images   # K>1 训练时每样本需提供 K 组图(oldest first)
+    reset_key: reset_memory             # 推理时 example 里该键为 True 则重置滚动记忆
+
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    include_state: true           # fold 训练吃 state(QwenPI_v3 离散化 state)
+    data_root_dir: /data/datasets/piper
+    data_mix: aloha_piper_all     # -> data_config DATASET_NAMED_MIXTURES["aloha_piper_all"]
+    lerobot_version: "v3.0"       # 关键! fold 是 LeRobot v3.0(默认 v2.0 会读不到 file-*)
+    action_type: abs_qpos         # fold action 是绝对关节角
+    action_mode: abs
+    sequential_step_sampling: False
+    per_device_batch_size: 4      # 单卡 4080 16G + 3 相机, 保守; 显存够再加
+    load_all_data_for_training: true
+    video_backend: pyav
+    obs_image_size: [224, 224]    # 推理 predict_action 据此 resize 224 方形, 对齐训练 _pack_sample
+
+trainer:
+  # 热启预训练 QwenPI_v3 权重(HAMLET 式利用预训练模型): 填基类训练产物的 .pt 路径。
+  # load_pretrained_backbones 全量加载为 strict=False —— 预训练键全部载入,
+  # 新增的 moment_tokens / moment_memory_transformer 缺失键自动保留 fresh init(已冒烟验证)。
+  # pretrained_checkpoint: /path/to/base_qwenpi_v3/checkpoints/steps_xxxx_pytorch_model.pt
+  max_train_steps: 100000
+  num_warmup_steps: 2000
+  save_interval: 5000
+  eval_interval: 1000
+  learning_rate:
+    base: 1.0e-05
+    qwen_vl_interface: 1.0e-05    # moment_tokens 挂在 qwen_vl_interface 下, 同组学习率
+    action_model: 1.0e-04
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+  freeze_modules: ''
+  loss_scale:
+    vla: 1.0
+  max_grad_norm: 1.0
+  weight_decay: 0.0
+  logging_frequency: 10
+  gradient_clipping: 1.0
+  gradient_accumulation_steps: 4   # 等效 batch 16(4×4); 配合 per_device_batch_size 调
+  optimizer:
+    name: AdamW
+    betas: [0.9, 0.95]
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
