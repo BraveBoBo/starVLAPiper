@@ -191,3 +191,60 @@ DATASET_NAMED_MIXTURES = {
         ("fractal20220817_data_0.1.0_lerobot", 1.0, "oxe_rt1"),
     ],
 }
+
+
+# ---------------------------------------------------------------------------
+# ELEPHANT K-frame history variants (moment-memory training window)
+# Video delta_indices become [-(K-1)S, ..., -S, 0] (oldest first); state/action/
+# language untouched. Samples carry `history_images` (K groups) + `image`
+# (current group) via ElephantLeRobotSingleDataset. memory_window here must
+# equal framework.moment_memory.memory_window in the training yaml; stride
+# should match the inference action-execution interval (action chunk = 16).
+# ---------------------------------------------------------------------------
+from starVLA.dataloader.elephant.elephant_dataset import ElephantLeRobotSingleDataset
+
+
+class _ElephantHistoryMixin:
+    memory_window = 4   # K
+    memory_stride = 16  # S
+
+    @property
+    def video_indices(self):
+        k, s = self.memory_window, self.memory_stride
+        return [-(k - 1 - i) * s for i in range(k)]
+
+    def modality_config(self):
+        cfg = super().modality_config()
+        cfg["video"] = ModalityConfig(delta_indices=self.video_indices, modality_keys=self.video_keys)
+        return cfg
+
+    def make_dataset(self, **kwargs):
+        return ElephantLeRobotSingleDataset(**kwargs)
+
+
+class ElephantBridgeDataConfig(_ElephantHistoryMixin, OxeBridgeDataConfig):
+    pass
+
+
+class ElephantRT1DataConfig(_ElephantHistoryMixin, OxeRT1DataConfig):
+    pass
+
+
+ROBOT_TYPE_CONFIG_MAP.update(
+    {
+        "oxe_bridge_elephant": ElephantBridgeDataConfig(),
+        "oxe_rt1_elephant": ElephantRT1DataConfig(),
+    }
+)
+
+DATASET_NAMED_MIXTURES.update(
+    {
+        "bridge_elephant": [
+            ("bridge_orig_1.0.0_lerobot", 1.0, "oxe_bridge_elephant"),
+        ],
+        "bridge_rt_1_elephant": [
+            ("bridge_orig_1.0.0_lerobot", 1.0, "oxe_bridge_elephant"),
+            ("fractal20220817_data_0.1.0_lerobot", 1.0, "oxe_rt1_elephant"),
+        ],
+    }
+)

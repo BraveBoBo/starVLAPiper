@@ -1,0 +1,92 @@
+run_id: elephant_bridge_rt1_finetune
+run_root_dir: results/Checkpoints
+seed: 42
+wandb_project: starVLA_simplerEnv
+wandb_entity: your_wandb_entity
+is_debug: false
+
+# ELEPHANT finetune on WidowX/Bridge: warm-start from the pretrained
+# Qwen3VL-PI_v3-Bridge-RT_1 checkpoint (base keys loaded strict=False; the new
+# moment/fla/readout keys keep their fresh init -- verified by smoke test).
+framework:
+  name: Elephant
+  qwenvl:
+    attn_implementation: flash_attention_2
+    base_vlm: /home/oem/project/starVLAPiper/playground/Pretrained_models/Qwen3-VL-4B-Instruct  # local symlink (ckpt's path is machine-stale)
+    num_vl_layers: 36
+    vl_hidden_dim: 2560
+  action_model:            # == pretrained ckpt config (must match for warm start)
+    action_dim: 7
+    action_horizon: 16
+    add_pos_embed: true
+    max_seq_len: 1024
+    noise_beta_alpha: 1.5
+    noise_beta_beta: 1.0
+    noise_s: 0.999
+    num_inference_timesteps: 4
+    num_target_vision_tokens: 32
+    num_timestep_buckets: 1000
+    state_dim: 7
+    diffusion_model_cfg:
+      action_dit_hidden_dim: 1024
+      attention_head_dim: 64
+      cross_attention_dim: 1024
+      dropout: 0.2
+      final_dropout: true
+      input_embedding_dim: 1024
+      interleave_self_attention: false
+      norm_type: ada_norm
+      num_attention_heads: 16
+      num_layers: 36
+      output_dim: 1024
+      positional_embeddings: null
+  moment_memory:
+    enabled: true
+    num_moment_tokens: 4
+    memory_window: 4            # K = 训练窗口帧数(须 == data_registry 的 memory_window); 推理恒为无限递归状态
+    memory_num_layers: 2
+    fla_num_heads: 2
+    fla_head_dim: 128
+    fla_expand_v: 2.0
+    readout_num_queries: 4      # 须 == num_moment_tokens
+    readout_num_layers: 2
+    readout_num_heads: 8
+    history_image_key: history_images
+    reset_key: reset_memory
+
+datasets:
+  vla_data:
+    dataset_py: lerobot_datasets
+    data_root_dir: playground/Datasets/OXE_LEROBOT_DATASET   # 软链: bridge_orig_1.0.0_lerobot -> /data/datasets/bridge_orig_lerobot 等
+    data_mix: bridge_rt_1_elephant   # K=4 history_images 契约(data_registry Elephant 版); K=1 冒烟可换 bridge_rt_1
+    image_size: [224, 224]
+    obs_image_size: [224, 224]
+    per_device_batch_size: 1         # 4080 16G: B*K=4 行 backbone/样本; 显存富余再加
+    video_backend: torchvision_av
+
+trainer:
+  pretrained_checkpoint: /home/oem/project/starVLAPiper/playground/Checkpoints/Qwen3VL-PI_v3-Bridge-RT_1/checkpoints/steps_50000_pytorch_model.pt
+  max_train_steps: 20000
+  num_warmup_steps: 1000
+  save_interval: 2000
+  eval_interval: 1000
+  learning_rate:
+    base: 1.0e-05
+    qwen_vl_interface: 1.0e-05     # moment_tokens 同组; 全冻 VLM 实验时置 freeze_modules 并另调
+    action_model: 1.0e-04
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+  freeze_modules: ''
+  loss_scale:
+    vla: 1.0
+  max_grad_norm: 1.0
+  weight_decay: 0.0
+  logging_frequency: 10
+  gradient_clipping: 1.0
+  gradient_accumulation_steps: 16  # 等效 batch 16
+  optimizer:
+    name: AdamW
+    betas: [0.9, 0.95]
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
