@@ -5,83 +5,25 @@ ELEPHANT Framework -- long-memory VLA ("an elephant never forgets")
 Extension-only HAMLET-style variant of QwenPI_v3. Learnable moment tokens are
 appended to the VLM sequence tail as an independent nn.Parameter via
 ElephantQwen3Interface (inputs_embeds concat -- tokenizer/embedding table
-untouched, HAMLET style, arXiv:2510.00695). Their post-LLM hidden states are
-aggregated across a short history window, then the memory-augmented current
-moment tokens are exposed to the layer-wise Action DiT.
+untouched, HAMLET style, arXiv:2510.00695). Their post-LLM hidden states flow
+into an UNBOUNDED recurrent memory (official fla GatedDeltaNet stack, O(1)
+state, no history cap), whose current-step output is read out by a QFormer
+(m learnable queries over the fla output) and exposed to the layer-wise
+Action DiT. Training runs the K-frame window through the chunk kernel;
+inference rolls a persistent fla Cache one step per call.
 """
 
 from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
 
 from deployment.model_server.tools.image_tools import to_pil_preserve
 from starVLA.model.framework.VLM4A.QwenPI_v3 import Qwen_PI_v3
+from starVLA.model.modules.action_model.elephant_memory import QFormerReadout, RecurrentMomentMemory
 from starVLA.model.modules.vlm.elephant_qwen3 import ElephantQwen3Interface
 from starVLA.model.tools import FRAMEWORK_REGISTRY
 from starVLA.training.trainer_utils.trainer_tools import resize_images
-
-
-class BlockCausalMomentMemory(nn.Module):
-    """Aggregate K sets of moment tokens with bidirectional-in-block, causal-across-block attention."""
-
-    def __init__(
-        self,
-        dim: int,
-        num_moment_tokens: int,
-        memory_window: int,
-        num_layers: int,
-        num_heads: int,
-        mlp_ratio: float,
-        dropout: float,
-    ):
-        super().__init__()
-        if dim % num_heads != 0:
-            raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}.")
-
-        self.dim = int(dim)
-        self.num_moment_tokens = int(num_moment_tokens)
-        self.memory_window = int(memory_window)
-        self.seq_len = self.num_moment_tokens * self.memory_window
-
-        layer = nn.TransformerEncoderLayer(
-            d_model=self.dim,
-            nhead=int(num_heads),
-            dim_feedforward=int(self.dim * mlp_ratio),
-            dropout=float(dropout),
-            activation=F.gelu,
-            batch_first=True,
-            norm_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=int(num_layers))
-        self.final_norm = nn.LayerNorm(self.dim)
-
-        positions = torch.arange(self.memory_window, dtype=torch.long).repeat_interleave(self.num_moment_tokens)
-        allow = positions.unsqueeze(0) <= positions.unsqueeze(1)
-        mask = torch.zeros(self.seq_len, self.seq_len, dtype=torch.float32)
-        mask.masked_fill_(~allow, float("-inf"))
-        self.register_buffer("attn_mask", mask, persistent=False)
-
-    def forward(self, moment_sequence: torch.Tensor) -> torch.Tensor:
-        if moment_sequence.dim() != 3:
-            raise ValueError(f"moment_sequence must be [B, K*n_q, D], got {tuple(moment_sequence.shape)}.")
-        if moment_sequence.shape[1] != self.seq_len:
-            raise ValueError(f"Expected sequence length {self.seq_len}, got {moment_sequence.shape[1]}.")
-        if moment_sequence.shape[2] != self.dim:
-            raise ValueError(f"Expected hidden dim {self.dim}, got {moment_sequence.shape[2]}.")
-
-        # Compute in the module's own dtype (fp32) for stability and to keep
-        # nn.TransformerEncoder's fused fast path happy under bf16 autocast callers;
-        # cast back to the caller's dtype so downstream concat stays consistent.
-        in_dtype = moment_sequence.dtype
-        x = moment_sequence.to(self.final_norm.weight.dtype)
-        mask = self.attn_mask.to(device=x.device, dtype=x.dtype)
-        return self.final_norm(self.encoder(x, mask=mask)).to(in_dtype)
-
-    def current_slice(self, memory_output: torch.Tensor) -> torch.Tensor:
-        return memory_output[:, -self.num_moment_tokens :, :]
 
 
 @FRAMEWORK_REGISTRY.register("Elephant")
@@ -93,7 +35,8 @@ class Elephant(Qwen_PI_v3):
         - ``example[moment_memory.history_image_key]``: list of K image groups,
           oldest first and current last. Each image group has the same format as
           ``example["image"]``.
-    Inference uses a rolling cache from current-frame calls.
+    Inference rolls an unbounded fla recurrent state one step per call
+    (reset via ``example[moment_memory.reset_key]`` at episode boundaries).
     """
 
     def __init__(self, config: Optional[dict] = None, **kwargs) -> None:
@@ -117,21 +60,35 @@ class Elephant(Qwen_PI_v3):
                 n_moment_tokens=self.num_moment_tokens,
                 base_interface=self.qwen_vl_interface,
             )
-            self.moment_memory_transformer = BlockCausalMomentMemory(
+            self.moment_memory_transformer = RecurrentMomentMemory(
                 dim=self.action_dit_hidden_dim,
                 num_moment_tokens=self.num_moment_tokens,
-                memory_window=self.moment_memory_window,
                 num_layers=int(memory_cfg.memory_num_layers),
-                num_heads=int(memory_cfg.num_heads),
-                mlp_ratio=float(memory_cfg.mlp_ratio),
-                dropout=float(memory_cfg.dropout),
+                num_heads=int(memory_cfg.get("fla_num_heads", 2)),
+                head_dim=int(memory_cfg.get("fla_head_dim", 128)),
+                expand_v=float(memory_cfg.get("fla_expand_v", 2.0)),
+            )
+            readout_queries = int(memory_cfg.get("readout_num_queries", self.num_moment_tokens))
+            if readout_queries != self.num_moment_tokens:
+                # m == n_q keeps the injected tail the same length, so attention/image
+                # masks need no fix-up. Support for m != n_q would require mask edits.
+                raise ValueError(
+                    f"readout_num_queries ({readout_queries}) must equal "
+                    f"num_moment_tokens ({self.num_moment_tokens}) for now."
+                )
+            self.moment_readout = QFormerReadout(
+                dim=self.action_dit_hidden_dim,
+                num_queries=readout_queries,
+                num_layers=int(memory_cfg.get("readout_num_layers", 2)),
+                num_heads=int(memory_cfg.get("readout_num_heads", 8)),
             )
         else:
             self.moment_memory_transformer = None
-        # Rolling inference cache, single shared cache => single-session/serial-env only.
-        # Parallel envs would cross-contaminate; per-session isolation (keyed cache or a
-        # recurrent state per session) is planned for the fla infinite-memory phase.
-        self._moment_memory_cache: Optional[torch.Tensor] = None
+            self.moment_readout = None
+        # Persistent fla Cache (recurrent + short-conv state), rolled one step per
+        # predict_action call. Single shared state => single-session/serial-env only;
+        # parallel envs would cross-contaminate (per-session isolation TBD with eval).
+        self._moment_memory_state = None
 
     def _encode_flat_vl_with_moment_tokens(
         self,
@@ -196,31 +153,30 @@ class Elephant(Qwen_PI_v3):
         window_rows = flat_rows // batch_size
         if flat_rows != batch_size * window_rows:
             raise ValueError(f"Expected flat rows to be divisible by batch size {batch_size}, got {flat_rows}.")
-        if window_rows not in (1, self.moment_memory_window):
-            raise ValueError(
-                f"Moment memory got K={window_rows}; expected 1 or {self.moment_memory_window}."
-            )
 
         last_layer = flat_vl_embs_list[-1].view(batch_size, window_rows, seq_len, hidden_dim)
-        moment_current = last_layer[:, -1, -self.num_moment_tokens :, :]
+        n_q = self.num_moment_tokens
 
-        # NOTE: when moment_memory_window == 1, inference (use_cache=True) also lands in this
-        # branch because window_rows==K_target==1; that is computationally equivalent (memory
-        # over the current frame only) and the rolling cache stays unused by design.
-        if window_rows == self.moment_memory_window:
-            moment_all = last_layer[:, :, -self.num_moment_tokens :, :]
-            memory_input = moment_all.reshape(
-                batch_size,
-                self.moment_memory_window * self.num_moment_tokens,
-                hidden_dim,
-            )
-        elif use_cache:
-            memory_input = self._update_moment_memory_cache(moment_current, reset_memory)
-        else:
-            memory_input = moment_current.repeat(1, self.moment_memory_window, 1)
-
-        memory_output = self.moment_memory_transformer(memory_input)
-        memory_current = self.moment_memory_transformer.current_slice(memory_output)
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            if use_cache:
+                # Inference: one step per call against the persistent fla Cache --
+                # unbounded history regardless of the training window (incl. K==1).
+                moment_current = last_layer[:, -1, -n_q:, :]
+                state = self._moment_memory_state
+                if self.moment_memory_transformer.state_batch_size(state) not in (None, batch_size):
+                    state = None  # batch size changed -> fresh state
+                if state is not None and reset_memory is not None and reset_memory.any():
+                    self.moment_memory_transformer.reset_state_rows(state, reset_memory.to(torch.bool))
+                y_cur, state = self.moment_memory_transformer(moment_current, cache=state, use_cache=True)
+                self._moment_memory_state = state
+            else:
+                # Training: the whole K-frame window (any K >= 1) in one stateless
+                # chunk-kernel pass; gradient flows through the scan across all K steps.
+                moment_all = last_layer[:, :, -n_q:, :].reshape(batch_size, window_rows * n_q, hidden_dim)
+                y, _ = self.moment_memory_transformer(moment_all)
+                y_cur = self.moment_memory_transformer.current_slice(y)
+            memory_current = self.moment_readout(y_cur)
+        memory_current = memory_current.to(last_layer.dtype)
 
         current_vl_embs_list = []
         for layer_hidden in flat_vl_embs_list:
@@ -234,30 +190,8 @@ class Elephant(Qwen_PI_v3):
             current_attention_mask = flat_attention_mask.view(batch_size, window_rows, seq_len)[:, -1, :]
         return current_vl_embs_list, current_attention_mask
 
-    def _update_moment_memory_cache(
-        self,
-        moment_current: torch.Tensor,
-        reset_memory: Optional[torch.Tensor],
-    ) -> torch.Tensor:
-        batch_size, num_moment_tokens, hidden_dim = moment_current.shape
-        cache_len = self.moment_memory_window * self.num_moment_tokens
-        default_cache = moment_current.repeat(1, self.moment_memory_window, 1)
-
-        if self._moment_memory_cache is None or self._moment_memory_cache.shape[0] != batch_size:
-            self._moment_memory_cache = default_cache
-            return self._moment_memory_cache
-
-        shifted_cache = torch.cat((self._moment_memory_cache[:, num_moment_tokens:, :], moment_current), dim=1)
-        if reset_memory is not None and reset_memory.any():
-            reset_mask = reset_memory.to(device=moment_current.device, dtype=torch.bool).view(batch_size, 1, 1)
-            reset_mask = reset_mask.expand(batch_size, cache_len, hidden_dim)
-            self._moment_memory_cache = torch.where(reset_mask, default_cache, shifted_cache)
-        else:
-            self._moment_memory_cache = shifted_cache
-        return self._moment_memory_cache
-
     def reset_moment_memory(self) -> None:
-        self._moment_memory_cache = None
+        self._moment_memory_state = None
 
     def _encode_vl_hidden_states_with_moment_memory(
         self,

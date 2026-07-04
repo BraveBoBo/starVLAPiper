@@ -20,13 +20,16 @@ framework:
   moment_memory:
     enabled: true
     num_moment_tokens: 4        # n_q 个可学习 moment token(独立 nn.Parameter 拼 inputs_embeds 尾部, 不动 tokenizer)
-    memory_window: 1            # K; 起步 1(仅当前帧摘要条件), 跑通后升 4(需 history_images 数据契约)
-    memory_num_layers: 2        # BlockCausalMomentMemory 深度
-    num_heads: 8
-    mlp_ratio: 4.0
-    dropout: 0.0
+    memory_window: 1            # K = 训练时每样本采样帧数(仅影响训练; 推理恒为无限递归状态), 升 4 需 history_images 数据契约
+    memory_num_layers: 2        # fla GatedDeltaNet 递归层数
+    fla_num_heads: 2            # GatedDeltaNet heads
+    fla_head_dim: 128           # Dk; 递归状态/层 = (B, heads, Dv, Dk) fp32
+    fla_expand_v: 2.0           # Dv = head_dim * expand_v
+    readout_num_queries: 4      # QFormer 读出 query 数 m(须 == num_moment_tokens, 注入零 mask 改动)
+    readout_num_layers: 2       # 读出 CrossAttentionBlock 层数
+    readout_num_heads: 8
     history_image_key: history_images   # K>1 训练时每样本需提供 K 组图(oldest first)
-    reset_key: reset_memory             # 推理时 example 里该键为 True 则重置滚动记忆
+    reset_key: reset_memory             # 推理时 example 里该键为 True 则重置递归记忆(episode 边界)
 
 datasets:
   vla_data:
