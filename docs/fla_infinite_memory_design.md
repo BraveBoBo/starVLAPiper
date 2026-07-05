@@ -42,3 +42,19 @@
 框架侧 `Elephant(原 QwenPI_v3_MomentMemory)` 保留:`BlockCausalMomentMemory` 窗口聚合(Phase 2 换 fla)、K 帧窗口展开、滚动 cache + 逐行 reset、`enabled=False` no-op。
 
 **同族佐证**:HAMLET(ICLR 2026, arXiv:2510.00695);CronusVLA(arXiv:2506.19816)——motion features + FIFO 特征缓存,每帧只过一次 VLM,历史在 post-LLM 特征层聚合。
+
+## 时序段训练(Temporal-Segment + 每步监督)—— 定稿 2026-07-05,已归档待实现
+
+**动机**:滑动窗口训练每帧每 epoch 过 VLM ≈K 次(IO 同);段训练把"每监督信号的 VLM 前向"从 K 降到 1。
+
+**定稿设计**(完整版见批准计划;要点):
+1. **段 = stride 网格**:anchor=段首,video `delta_indices=[i*16 for i in range(T)]`(正向);S=16 **必须**等于推理 action-chunk 执行间隔(train/infer 时钟对齐——文献空白,一等设计点);
+2. **动作无缝铺装**:S==horizon=16 → `action_indices=range(T*16)` reshape `(T,16,7)`,段内 T 个 chunk 无重叠无空洞;
+3. **每步监督**(收益唯一来源):fla 整段 chunk 扫保留全部步输出 → `(B*T, n_q, d)` 批量过 QFormerReadout → 替换**所有** DiT 层尾部 → B*T 行独立出 flow-matching loss;只监督最后一步则与滑动窗口零差异;
+4. **burn-in**(R2D2):段前 `burn_in_steps`(默认 T/4)只暖状态不计 loss,治段中零状态失真;
+5. **step_valid_mask**:dataset 子类自算(管线的 padding_positions 算完即弃),episode 末尾 clamp 步不进 loss;`LayerwiseFM_ActionHeader` 加可选 `loss_mask=None`(默认行为不变);
+6. **训练配方**:有效 batch 按独立段数计(√B LR 缩放);T∈{4,8,16} 扫描;**记忆置零消融必做**(防每步监督下模型忽略记忆作弊)。
+
+**文献支撑**:范式 = Decision Transformer/Decision Mamba/LRAM(xLSTM,chunk 训 + 递归推);B×T 展平 forward = CronusVLA 公开代码同构(但其只监督最后一步,1:M);"可训练线性注意力递归 + 每步 flow-matching"组合无公开先例。fla `cu_seqlens`(batch=1 打包自动边界重置)为多段打包备选;Dreamer 携带态 TBPTT 为 Phase B。
+
+**本仓库缺口**(审计结论):`sequential_step_sampling` 为死字段勿复用;正向 delta/collate/DiT 行独立均已支持;需新增:dataset 段打包+mask、Elephant 4D 动作切轴+多步路由、action header 可选 mask(~1 天)。实现顺序:先跑 K=4 滑动窗口冒烟基线,再实现本方案。
